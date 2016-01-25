@@ -5,6 +5,7 @@ package fs
 import (
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"path"
 	"strings"
@@ -411,7 +412,14 @@ func DeleteFiles(toBeDeleted ObjectsChan) {
 func readFilesMap(fs Fs, includeAll bool) map[string]Object {
 	files := make(map[string]Object)
 	normalised := make(map[string]struct{})
-	for o := range fs.List() {
+	opts := newListOpts(Config.Checkers)
+	go fs.List(opts)
+	for {
+		o, err := opts.Get()
+		if err != nil {
+			log.Fatal(err)
+			return files
+		}
 		remote := o.Remote()
 		normalisedRemote := strings.ToLower(norm.NFC.String(remote))
 		if _, ok := files[remote]; !ok {
@@ -552,7 +560,13 @@ func syncCopyMove(fdst, fsrc Fs, Delete bool, DoMove bool) error {
 	}
 
 	go func() {
-		for src := range srcObjects {
+		opts := newListOpts(Config.Checkers)
+		go fsrc.List(opts)
+		for {
+			src, err := opts.Get()
+			if err != nil {
+				log.Fatal(fsrc, err)
+			}
 			remote := src.Remote()
 			if dst, dstFound := dstFiles[remote]; dstFound {
 				toBeChecked <- ObjectPair{src, dst}
@@ -732,13 +746,21 @@ func Check(fdst, fsrc Fs) error {
 //
 // Lists in parallel which may get them out of order
 func ListFn(f Fs, fn func(Object)) error {
-	in := f.List()
+	opts := newListOpts(Config.Checkers)
+	go f.List(opts)
 	var wg sync.WaitGroup
 	wg.Add(Config.Checkers)
 	for i := 0; i < Config.Checkers; i++ {
 		go func() {
 			defer wg.Done()
-			for o := range in {
+			for {
+				o, err := opts.Get()
+				if err != nil {
+					log.Fatal(err)
+				}
+				if o == nil {
+					return
+				}
 				if Config.Filter.IncludeObject(o) {
 					fn(o)
 				}
@@ -833,7 +855,16 @@ func Count(f Fs) (objects int64, size int64, err error) {
 
 // ListDir lists the directories/buckets/containers in the Fs to the supplied writer
 func ListDir(f Fs, w io.Writer) error {
-	for dir := range f.ListDir() {
+	opts := newListDirOpts(10)
+	go f.ListDir(opts)
+	for {
+		dir, err := opts.Get()
+		if err != nil {
+			log.Fatal(err)
+		}
+		if dir == nil {
+			break
+		}
 		syncFprintf(w, "%12d %13s %9d %s\n", dir.Bytes, dir.When.Format("2006-01-02 15:04:05"), dir.Count, dir.Name)
 	}
 	return nil
@@ -882,7 +913,9 @@ func Purge(f Fs) error {
 	}
 	if doFallbackPurge {
 		// DeleteFiles and Rmdir observe --dry-run
-		DeleteFiles(f.List())
+		opts := newListOpts(Config.Checkers)
+		go f.List(opts)
+		DeleteFiles(listToChan(opts))
 		err = Rmdir(f)
 	}
 	if err != nil {
@@ -967,4 +1000,26 @@ func Deduplicate(f Fs) error {
 		}
 	}
 	return nil
+}
+
+// listToChan will transfer all incoming objects to
+// a new channel.
+// If an error occurs, the error will be logged, and the program
+// will exit.
+func listToChan(opts *listOpts) ObjectsChan {
+	o := make(ObjectsChan, Config.Checkers)
+	go func() {
+		defer close(o)
+		for {
+			obj, err := opts.Get()
+			if err != nil {
+				log.Fatal(err)
+			}
+			if obj == nil {
+				return
+			}
+			o <- obj
+		}
+	}()
+	return o
 }

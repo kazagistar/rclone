@@ -456,7 +456,7 @@ func (f *Fs) findExportFormat(filepath string, item *drive.File) (extension, lin
 //
 // This fetches the minimum amount of stuff but does more API calls
 // which makes it slow
-func (f *Fs) listDirRecursive(dirID string, path string, out fs.ObjectsChan) error {
+func (f *Fs) listDirRecursive(dirID string, path string, out fs.ListOpts) error {
 	var subError error
 	// Make the API request
 	var wg sync.WaitGroup
@@ -515,8 +515,8 @@ func (f *Fs) listDirRecursive(dirID string, path string, out fs.ObjectsChan) err
 }
 
 // List walks the path returning a channel of FsObjects
-func (f *Fs) List() fs.ObjectsChan {
-	out := make(fs.ObjectsChan, fs.Config.Checkers)
+func (f *Fs) List() fs.ListOpts {
+	out := make(fs.ListOpts, fs.Config.Checkers)
 	go func() {
 		defer close(out)
 		err := f.dirCache.FindRoot(false)
