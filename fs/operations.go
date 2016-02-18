@@ -977,7 +977,21 @@ func Deduplicate(f Fs) error {
 	}
 	Log(f, "Looking for duplicates")
 	files := map[string][]Object{}
-	for o := range f.List() {
+	opts := newListOpts(Config.Checkers)
+	go f.List(opts)
+	for {
+		o, dir, err := opts.Get()
+		if err != nil {
+			return err
+		}
+		// Check if we are finished
+		if dir == nil && o == nil {
+			break
+		}
+		// Ignore directories
+		if dir != nil {
+			continue
+		}
 		remote := o.Remote()
 		files[remote] = append(files[remote], o)
 	}
